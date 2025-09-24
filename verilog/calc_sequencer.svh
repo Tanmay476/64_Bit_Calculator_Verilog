@@ -5,7 +5,7 @@ class calc_sequencer #(int DataSize, int AddrSize);
   function new();
     calc_box = new();
   endfunction : new
-
+ 
   task gen (int num);
     repeat (num) begin
       calc_seq_item #(DataSize, AddrSize) my_trans = new();
