@@ -15,13 +15,14 @@ module calc_tb_top;
 
   logic [DataSize-1:0] read_lo, read_hi;
 
-      // We'll use two consecutive read addresses so the controller will place the
+    // We'll use two consecutive read addresses so the controller will place the
     // first addition into the lower 32 bits of the buffer and the second into the upper 32 bits.
     logic [AddrSize-1:0] addr0, addr1, write_addr;
     logic [DataSize-1:0] a0, b0, a1, b1;
     logic [DataSize-1:0] expected_lo, expected_hi;
 
     logic [DataSize-1:0] got_lo, got_hi;
+    logic [AddrSize-1:0] a, a1, a2;
     int NUM_RANDOM;
 
 
@@ -84,8 +85,8 @@ module calc_tb_top;
     calc_driver_h.initialize_sram(addr, data, block_sel);
   endtask
 
-  // Helper task: start a background calculation and pulse reset when the controller
-  // reaches the specified `target` state. Includes a timeout to avoid hangs.
+  // Task that starts a background calculation and pulses reset when the controller
+  // reaches a specific state, mainly to increase fsm coverage in verdi
   task automatic reset_when_state(input state_t target,
                                   input [AddrSize-1:0] read_s,
                                   input [AddrSize-1:0] read_e,
@@ -110,7 +111,7 @@ module calc_tb_top;
         $display("RESET_WHEN_STATE: timed out waiting for state %0d (current=%0d)", target, state);
       end else begin
         $display("RESET_WHEN_STATE: reached state %0d at time %0t; pulsing reset", target, $time);
-        calc_driver_h.reset_task(); // pulse reset via clocking block
+        calc_driver_h.reset_task(); // pulse re\set via clocking block
         // allow some cycles to settle
         repeat (3) @(posedge clk);
       end
@@ -151,6 +152,7 @@ module calc_tb_top;
   // Directed part
   $display("Directed Testing");
   $display("Test case 1 - normal addition");
+  // TODO: Finish test case 1 (additional directed cases can be added here)
 
   // Choose an address and operand values
     tb_test_addr = 'h10;
@@ -181,13 +183,8 @@ module calc_tb_top;
   $display("Directed result: SRAM A (lower 32): 0x%0x, SRAM B (upper 32): 0x%0x", read_lo, read_hi);
   $display("Expected (32-bit sum): 0x%0x", tb_expected);
 
-  // TODO: Finish test case 1 (additional directed cases can be added here)
-
     // Test case 2 - addition with overflow (top-half overflow)
     $display("Test case 2 - addition with overflow (top-half)");
-
-
-
     addr0 = 'h20;
     addr1 = 'h21;
     write_addr = 'h30; // where the combined 64-bit result will be written
@@ -257,6 +254,72 @@ module calc_tb_top;
       $display("Zero test PASSED: expected 0x%0x found (lo=0x%0x hi=0x%0x)", tb_expected, read_lo, read_hi);
     end
 
+    // Directed FSM coverage tests: exercise read->write and idle->write transitions
+    $display("Directed FSM coverage tests: single-read / multi-write and multi-read / single-write");
+
+    // Case A: single read (read_start == read_end) but multi-write (write_start < write_end)
+    // This should exercise paths where read range completes quickly and writes continue,
+    // exercising the condition (read_addr != read_end_addr) == 0 while (write_addr_next != write_end_addr) == 1
+    addr0 = 'h40;
+    write_addr = 'h50;
+    // initialize single read address
+    write_sram(addr0, 32'h1, 0);
+    write_sram(addr0, 32'h2, 1);
+    // initialize write addresses
+    for (int i = 0; i < 3; i++) begin
+      write_sram(write_addr + i, $random, 0);
+      write_sram(write_addr + i, $random, 1);
+    end
+    @(posedge clk);
+    $display("Starting Case A: single-read %0h multi-write %0h-%0h", addr0, write_addr, write_addr+2);
+    calc_driver_h.start_calc(addr0, addr0, write_addr, write_addr+2, 1);
+    wait (state == S_END);
+    @(posedge clk);
+
+    // Case B: multi-read (read_start < read_end) but single-write (write_start == write_end)
+    // This should exercise the inverse condition where reads are still pending when write finishes.
+    addr0 = 'h60;
+    addr1 = 'h62; // two reads
+    write_addr = 'h70;
+    // initialize multi-read addresses
+    write_sram(addr0, $random, 0);
+    write_sram(addr0, $random, 1);
+    write_sram(addr1, $random, 0);
+    write_sram(addr1, $random, 1);
+    // initialize single write address
+    write_sram(write_addr, $random, 0);
+    write_sram(write_addr, $random, 1);
+    @(posedge clk);
+    $display("Starting Case B: multi-read %0h-%0h single-write %0h", addr0, addr1, write_addr);
+    calc_driver_h.start_calc(addr0, addr1, write_addr, write_addr, 1);
+    wait (state == S_END);
+    @(posedge clk);
+
+    // Toggle stress: exercise address bit toggles and buffer loc_sel transitions
+    $display("Toggle stress: exercising address and loc_sel toggles");
+    // Choose a write base that is unlikely to collide with other test addresses
+    write_addr = 'h100;
+    // declare temporaries once (more simulator-friendly)
+    for (int b = 0; b < AddrSize; b++) begin
+      // Create a pair of consecutive addresses that toggle one bit using a safe shift
+      a  = (1'b1 << b);
+      a1 = a;
+      a2 = a + 1;
+
+      // Initialize the pair in both SRAMs
+      write_sram(a1, $random, 0);
+      write_sram(a1, $random, 1);
+      write_sram(a2, $random, 0);
+      write_sram(a2, $random, 1);
+
+      @(posedge clk);
+      // Start a small range read (two addresses) so controller toggles buffer_half internally
+      calc_driver_h.start_calc(a1, a2, write_addr, write_addr, 1);
+      wait (state == S_END);
+      @(posedge clk);
+      write_addr++;
+    end
+
   // Add a few conservative, explicit directed tests (no SVA, no loops)
   // These are written plainly to avoid simulator dialect issues.
 
@@ -275,6 +338,9 @@ module calc_tb_top;
 
   // Random part
   $display("Randomized Testing");
+  // TODO: Finish randomized testing
+  // HINT: The sequencer is responsible for generating random input sequences. How can the
+  // sequencer and driver be combined to generate multiple randomized test cases?
   // Generate a batch of randomized transactions with the sequencer, then have the
   // driver consume them. The current driver implementation uses a non-blocking
   // try_get() loop, so we populate the mailbox first and then call drive().
@@ -320,5 +386,9 @@ module calc_tb_top;
   // 5) Ready signal should imply controller is in S_END (sanity check)
   assert property (@(posedge clk) disable iff (calc_if.reset) (calc_if.ready |-> (state == S_END)))
     else $error("ASSERTION FAILED at %0t: ready asserted while state != S_END (state=%0d)", $time, state);
+
+// Coverage properties to capture important FSM transitions directly
+cover property (@(posedge clk) (state == S_READ ##1 state == S_WRITE));
+cover property (@(posedge clk) (state == S_IDLE ##1 state == S_WRITE));
 
 endmodule
