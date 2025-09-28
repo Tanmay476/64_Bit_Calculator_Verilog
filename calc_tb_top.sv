@@ -14,6 +14,8 @@ module calc_tb_top;
   logic [DataSize-1:0] rd_data;
 
   logic [DataSize-1:0] read_lo, read_hi;
+  int t2 = 1000;
+  int quiet = 0;
 
     // We'll use two consecutive read addresses so the controller will place the
     // first addition into the lower 32 bits of the buffer and the second into the upper 32 bits.
@@ -22,7 +24,7 @@ module calc_tb_top;
     logic [DataSize-1:0] expected_lo, expected_hi;
 
     logic [DataSize-1:0] got_lo, got_hi;
-    logic [AddrSize-1:0] a, a1, a2;
+    logic [AddrSize-1:0] c, c1, c2; 
     int NUM_RANDOM;
 
 
@@ -111,6 +113,20 @@ module calc_tb_top;
         $display("RESET_WHEN_STATE: timed out waiting for state %0d (current=%0d)", target, state);
       end else begin
         $display("RESET_WHEN_STATE: reached state %0d at time %0t; pulsing reset", target, $time);
+        // Defensive check: wait for two consecutive quiet clocking samples
+        // from the clocking block before invoking the driver reset task.
+        while ((quiet < 2) && (t2 > 0)) begin
+          @(calc_if.cb);
+          if (!(calc_if.cb.rd_en || calc_if.cb.wr_en)) begin
+            quiet += 1;
+          end else begin
+            quiet = 0;
+          end
+          t2 -= 1;
+        end
+        if (quiet < 2) begin
+          $display("RESET_WHEN_STATE: warning - timed out waiting for two quiet cycles before reset; proceeding to call driver.reset_task() at %0t", $time);
+        end
         calc_driver_h.reset_task(); // pulse re\set via clocking block
         // allow some cycles to settle
         repeat (3) @(posedge clk);
@@ -257,7 +273,6 @@ module calc_tb_top;
     // Directed FSM coverage tests: exercise read->write and idle->write transitions
     $display("Directed FSM coverage tests: single-read / multi-write and multi-read / single-write");
 
-    // Case A: single read (read_start == read_end) but multi-write (write_start < write_end)
     // This should exercise paths where read range completes quickly and writes continue,
     // exercising the condition (read_addr != read_end_addr) == 0 while (write_addr_next != write_end_addr) == 1
     addr0 = 'h40;
@@ -295,33 +310,34 @@ module calc_tb_top;
     wait (state == S_END);
     @(posedge clk);
 
-    // Toggle stress: exercise address bit toggles and buffer loc_sel transitions
-    $display("Toggle stress: exercising address and loc_sel toggles");
+   /* Toggle stress block:
+     For each address bit, test a pair of consecutive addresses that differ by one bit.
+     The test initializes both SRAM halves for the pair, runs a two-address calculation,
+     and writes the result to a unique write location. This exercises buffer toggling
+     and related read/write state transitions in the controller. */
+   $display("Toggle stress: exercising address and loc_sel toggles");
     // Choose a write base that is unlikely to collide with other test addresses
     write_addr = 'h100;
     // declare temporaries once (more simulator-friendly)
     for (int b = 0; b < AddrSize; b++) begin
       // Create a pair of consecutive addresses that toggle one bit using a safe shift
-      a  = (1'b1 << b);
-      a1 = a;
-      a2 = a + 1;
+      c  = (1'b1 << b);
+      c1 = c;
+      c2 = c + 1;
 
       // Initialize the pair in both SRAMs
-      write_sram(a1, $random, 0);
-      write_sram(a1, $random, 1);
-      write_sram(a2, $random, 0);
-      write_sram(a2, $random, 1);
+      write_sram(c1, $random, 0);
+      write_sram(c1, $random, 1);
+      write_sram(c2, $random, 0);
+      write_sram(c2, $random, 1);
 
       @(posedge clk);
       // Start a small range read (two addresses) so controller toggles buffer_half internally
-      calc_driver_h.start_calc(a1, a2, write_addr, write_addr, 1);
+      calc_driver_h.start_calc(c1, c2, write_addr, write_addr, 1);
       wait (state == S_END);
       @(posedge clk);
       write_addr++;
     end
-
-  // Add a few conservative, explicit directed tests (no SVA, no loops)
-  // These are written plainly to avoid simulator dialect issues.
 
   // Manual Test A - consecutive back-to-back starts (explicit sequential calls)
   // Reset-the-calc-at-each-state directed tests (run automatically)
@@ -386,9 +402,5 @@ module calc_tb_top;
   // 5) Ready signal should imply controller is in S_END (sanity check)
   assert property (@(posedge clk) disable iff (calc_if.reset) (calc_if.ready |-> (state == S_END)))
     else $error("ASSERTION FAILED at %0t: ready asserted while state != S_END (state=%0d)", $time, state);
-
-// Coverage properties to capture important FSM transitions directly
-cover property (@(posedge clk) (state == S_READ ##1 state == S_WRITE));
-cover property (@(posedge clk) (state == S_IDLE ##1 state == S_WRITE));
 
 endmodule

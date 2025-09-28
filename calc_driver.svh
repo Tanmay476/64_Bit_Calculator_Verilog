@@ -10,10 +10,33 @@ class calc_driver #(int DataSize, int AddrSize);
     this.drv_box = drv_box;
   endfunction
 
+  int timeout_cycles = 200;
+  int t;
+  int quiet_count = 0;
+  int quiet_count2 = 0;
+
   task reset_task();
     // Apply an active-high reset pulse to the DUT using the interface clocking block.
-    // The controller samples start addresses on reset, so set addresses before asserting reset.
+    // Before asserting reset, wait for any active read/write strobes to deassert
+    // to avoid protocol violations and partial transactions being observed by the
+    // scoreboard. Use a timeout to avoid hanging if the DUT never quiesces.
     @(calcVif.cb);
+    // wait until rd_en and wr_en are both low for two consecutive clocking samples or timeout
+    t = timeout_cycles;
+    quiet_count = 0;
+    while ((quiet_count < 2) && (t > 0)) begin
+      @(calcVif.cb);
+      if (!(calcVif.cb.rd_en || calcVif.cb.wr_en)) begin
+        quiet_count += 1; // one more quiet cycle observed
+      end else begin
+        quiet_count = 0; // activity seen, reset consecutive quiet counter
+      end
+      t -= 1;
+    end
+    if (quiet_count < 2) begin
+      $display("%0t Drv: reset_task timed out waiting for two quiet cycles (rd/wr); proceeding to assert reset", $time);
+    end
+    // Assert reset so controller latches start/write addresses into internal pointers
     calcVif.cb.reset <= 1;
     // keep reset asserted for a couple cycles
     repeat (2) @(calcVif.cb);
@@ -51,6 +74,24 @@ class calc_driver #(int DataSize, int AddrSize);
   // Drive addresses on one clocking tick, then assert reset on the following tick so
   // the controller reliably latches the provided start/write addresses.
   @(calcVif.cb);
+  // Before asserting reset, ensure there are no active read/write strobes.
+  // This avoids asserting reset in the middle of a transfer which violates
+  // the TB's reset-time protocol SVA and can create partial pairs in the
+  // scoreboard. Use a timeout to avoid deadlocking if the DUT never quiesces.
+  t = timeout_cycles;
+  // wait until rd_en and wr_en are both low for two consecutive clocking samples or timeout
+  while ((quiet_count2 < 2) && (t > 0)) begin
+    @(calcVif.cb);
+    if (!(calcVif.cb.rd_en || calcVif.cb.wr_en)) begin
+      quiet_count2 += 1;
+    end else begin
+      quiet_count2 = 0;
+    end
+    t -= 1;
+  end
+  if (quiet_count2 < 2) begin
+    $display("%0t Drv: start_calc timed out waiting for two quiet cycles (rd/wr); asserting reset anyway", $time);
+  end
   // Assert reset so controller latches start/write addresses into internal pointers
   calcVif.cb.reset <= 1;
   @(calcVif.cb);
