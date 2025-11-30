@@ -1,0 +1,232 @@
+# 64-Bit Calculator Verification
+
+A SystemVerilog-based 64-bit calculator design with comprehensive UVM-style verification environment. The design implements a memory-based calculator that reads operands from dual-port SRAM, performs 32-bit additions, and writes results back to memory.
+
+## Project Overview
+
+This project consists of a complete RTL implementation of a 64-bit calculator system and its verification testbench. The calculator reads 64-bit operands from memory (split across two 32-bit SRAM blocks), performs arithmetic operations, and stores results back to memory.
+
+### Key Features
+
+- **64-bit data path** with dual 32-bit SRAM blocks (Sky130 SRAM macro)
+- **FSM-based controller** managing read, add, and write operations
+- **Result buffering** for pipelined operation
+- **Comprehensive verification** with directed and randomized testing
+- **SystemVerilog Assertions (SVA)** for protocol checking
+- **UVM-style testbench** with driver, monitor, sequencer, and scoreboard
+
+## Architecture
+
+### RTL Components (`rtl/`)
+
+- **`top_lvl.sv`**: Top-level integration module
+  - Connects controller, SRAM, adder, and result buffer
+  - Manages dual-port SRAM interface
+
+- **`controller.sv`**: FSM-based control logic
+  - States: `S_IDLE`, `S_READ`, `S_ADD`, `S_WRITE`, `S_END`
+  - Manages memory read/write sequencing
+  - Controls buffer location selection
+
+- **`adder32.sv`**: 32-bit ripple-carry adder
+  - Composed of 32 full adders
+  - Performs arithmetic addition
+
+- **`full_adder.sv`**: Single-bit full adder building block
+
+- **`result_buffer.sv`**: 64-bit result buffer
+  - Stores lower and upper 32-bit halves
+  - Location selector for sequential writes
+
+- **`sky130_sram_2kbyte_1rw1r_32x512_8.sv`**: Dual-port SRAM macro
+  - 512 words × 32 bits
+  - Port 0: Read/Write
+  - Port 1: Read-only
+
+- **`calculator_pkg.sv`**: Design parameter package
+  - `DATA_W = 32`: Data width
+  - `MEM_WORD_SIZE = 64`: Memory word size
+  - `ADDR_W = 9`: Address width (512 entries)
+
+### Testbench Components (`tb/`)
+
+- **`calc_tb_top.sv`**: Top-level testbench
+  - Instantiates DUT and verification components
+  - Runs directed and randomized tests
+  - Includes SystemVerilog assertions
+
+- **`calc_if.sv`**: Calculator interface
+  - Clocking blocks for synchronous communication
+  - Signal declarations for DUT connections
+
+- **`calc_driver.svh`**: Test driver
+  - Drives stimulus to DUT
+  - Initializes SRAM contents
+  - Controls start/reset sequences
+
+- **`calc_monitor.svh`**: Transaction monitor
+  - Observes DUT outputs
+  - Captures transactions via mailbox
+
+- **`calc_sequencer.svh`**: Test sequence generator
+  - Generates randomized test sequences
+  - Creates transaction items
+
+- **`calc_seq_item.svh`**: Transaction item definition
+  - Encapsulates test data
+
+- **`calc_sb.svh`**: Scoreboard
+  - Verifies DUT behavior
+  - Compares expected vs actual results
+
+- **`calc_tb_pkg.sv`**: Testbench package
+  - Imports verification components
+
+## Getting Started
+
+### Prerequisites
+
+- SystemVerilog simulator (VCS or Cadence)
+- Waveform viewer (Verdi for VCS or SimVision for Cadence)
+
+### Directory Structure
+
+```
+64_Bit_Calculator_Verification/
+├── rtl/                    # RTL design files
+│   ├── top_lvl.sv
+│   ├── controller.sv
+│   ├── adder32.sv
+│   ├── full_adder.sv
+│   ├── result_buffer.sv
+│   ├── calculator_pkg.sv
+│   └── sky130_sram_2kbyte_1rw1r_32x512_8.sv
+└── tb/                     # Testbench files
+    ├── calc_tb_top.sv
+    ├── calc_if.sv
+    ├── calc_driver.svh
+    ├── calc_monitor.svh
+    ├── calc_sequencer.svh
+    ├── calc_seq_item.svh
+    ├── calc_sb.svh
+    └── calc_tb_pkg.sv
+```
+
+### Compilation and Simulation
+
+#### For VCS:
+
+```bash
+# Compile
+vcs -sverilog -full64 -debug_access+all \
+    -timescale=1ns/1ps \
+    +define+VCS \
+    rtl/*.sv tb/*.sv tb/*.svh
+
+# Run simulation
+./simv
+```
+
+#### For Cadence:
+
+```bash
+# Compile
+xrun -64bit -sv -access +rwc \
+     +define+CADENCE \
+     rtl/*.sv tb/*.sv tb/*.svh
+```
+
+### Waveform Viewing
+
+#### VCS (Verdi):
+
+```bash
+verdi -ssf simulation.fsdb &
+```
+
+#### Cadence (SimVision):
+
+```bash
+simvision waves.shm &
+```
+
+## Test Cases
+
+### Directed Tests
+
+1. **Normal Addition** (`tb/calc_tb_top.sv:170`)
+   - Basic addition: 10 + 20 = 30
+   - Verifies single-address operation
+
+2. **Overflow Handling** (`tb/calc_tb_top.sv:202`)
+   - Tests 32-bit overflow: 0xFFFFFFFF + 1 = 0x00000000
+   - Validates upper/lower half independence
+
+3. **Zero Addition** (`tb/calc_tb_top.sv:247`)
+   - Edge case: 0 + 0 = 0
+
+4. **FSM Coverage Tests** (`tb/calc_tb_top.sv:273`)
+   - Single-read/multi-write scenarios
+   - Multi-read/single-write scenarios
+
+5. **Toggle Stress Test** (`tb/calc_tb_top.sv:318`)
+   - Exercises all address bits
+   - Tests buffer location toggling
+
+6. **Reset-at-State Tests** (`tb/calc_tb_top.sv:344`)
+   - Pulses reset at each FSM state
+   - Validates reset behavior
+
+### Randomized Testing
+
+- **200 random transactions** (`tb/calc_tb_top.sv:363`)
+- Generated by sequencer, executed by driver
+- Validated by scoreboard
+
+## SystemVerilog Assertions
+
+The testbench includes several SVA checks (`tb/calc_tb_top.sv:380`):
+
+1. No simultaneous read/write
+2. Single-cycle initialization pulse
+3. No operations during reset
+4. Valid address ranges (end >= start)
+5. Ready signal consistency with FSM state
+
+## Operation Flow
+
+1. **Initialization**: SRAM loaded with operands
+2. **Read Phase**: Controller reads operands from specified address range
+3. **Add Phase**: 32-bit adder computes sum
+4. **Write Phase**: Results written to output address range
+5. **End State**: Ready signal asserted
+
+## Memory Organization
+
+- **64-bit words** split across two SRAM blocks:
+  - `sram_A`: Lower 32 bits (bits [31:0])
+  - `sram_B`: Upper 32 bits (bits [63:32])
+- **Address space**: 512 entries (9-bit addressing)
+
+## Known Limitations
+
+- Only supports addition operations (no subtraction/multiplication)
+- 32-bit arithmetic (64-bit memory organization)
+- Sequential operation (no pipelining between transactions)
+
+## Contributing
+
+When modifying the design:
+
+1. Update RTL files in `rtl/` directory
+2. Add corresponding test cases in `calc_tb_top.sv`
+3. Update scoreboard logic if verification changes needed
+4. Run full test suite to ensure no regressions
+
+## License
+
+This project is an educational design for learning hardware verification techniques.
+
+## Contact
+
+For questions or issues, please open an issue in the GitHub repository.
