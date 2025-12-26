@@ -1,4 +1,4 @@
-# 64-Bit Calculator Verification
+# 64-Bit Calculator
 
 A SystemVerilog-based 64-bit calculator design with comprehensive UVM-style verification environment. The design implements a memory-based calculator that reads operands from dual-port SRAM, performs 32-bit additions, and writes results back to memory.
 
