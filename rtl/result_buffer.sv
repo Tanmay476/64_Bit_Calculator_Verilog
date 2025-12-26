@@ -16,7 +16,7 @@ module result_buffer import calculator_pkg::*; (
     //declare 64-bit buffer
     logic [MEM_WORD_SIZE-1 : 0] internal_buffer;  
 
-    //TODO: Write a sequential block to write the next values into the buffer.
+    //TODO: Write a sequential block to wrie the next values into the buffer.
     always_ff @(posedge clk_i) begin
         if (rst_i) begin
             internal_buffer <= '0;
